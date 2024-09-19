@@ -2,3 +2,5 @@ export-query3.csv
 export-query3-references.csv
 export-query3-citedby-level2.csv
 export-query3-citedby-level1.csv
+.env
+authors/
