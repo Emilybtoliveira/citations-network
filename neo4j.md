@@ -63,6 +63,27 @@ MATCH (res:Researcher)
 RETURN res
 ```
 
+**Relacionamento qualquer**
+```
+#Não direcionado
+MATCH (a:Researcher {scopus_id: 57212487257})-[r]-(b:Researcher {scopus_id: 57203172256})
+RETURN r
+
+#Direcionado
+MATCH (a:Researcher {scopus_id: 57212487257})-[r]->(b:Researcher {scopus_id: 57203172256})
+RETURN r 
+MATCH (a:Researcher {scopus_id: 57212487257})<-[r]-b:Researcher {scopus_id: 57203172256})
+RETURN r
+```
+
+**Relacionamento com propriedade**
+
+```cypher
+#Não direcionado
+MATCH (a:Researcher {scopus_id: 57212487257})-[r:CITED {doi: "DSF"}]-(b:Researcher {scopus_id: 57203172256})
+RETURN r
+```
+
 ## Deletes
 **Grafo inteiro**
 ```cypher

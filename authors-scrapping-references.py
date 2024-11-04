@@ -2,6 +2,7 @@ import os
 import requests
 import xml.etree.ElementTree as ET
 from dotenv import load_dotenv
+import re
 
 """ 
 COLUMNS: 
@@ -20,11 +21,12 @@ COLUMNS:
 load_dotenv()
 
 AUTHORS_DIR = "./authors"
-MINIMUM_ARTICLE_YEAR = 2019
+MINIMUM_ARTICLE_YEAR = 2022
+MAXIMUM_ARTICLE_YEAR = 2025
 SCOPUS_API_KEY = os.getenv('SCOPUS_API_KEY')
 
 yes, no, error, scopus_error = 0,0,0,0
-
+new_authors = 0
 
 def read_csv(path):
     with open(path, "r",  encoding='utf-8-sig') as file:
@@ -33,9 +35,13 @@ def read_csv(path):
     return csv
 
 def write_csv(path,line):
-    with open(path, "a") as file:
-        file.write(line)
-        file.close()
+    try:
+        with open(path, "a") as file:
+            file.write(line)
+            file.close()
+    except FileNotFoundError:
+        print(f"Arquivo {path} não encontrado.")
+        print(line)
 
 def write_replace_csv(path,line):
     with open(path, "w") as file:
@@ -69,6 +75,8 @@ def create_collab_relationship(article_doi:str, authors:dict):
             if(colab_author != author_id): write_csv(author_rel_file, f"{colab_author}&collaborated&{article_doi}\n")
 
 def generate_authors_files(article_doi:str, article_cite:str, authors:dict, citing_article:dict):
+    global new_authors
+
     for author in authors:
         author_id = author['scopus_id']
         author_dir = os.path.join(AUTHORS_DIR, author_id)
@@ -81,6 +89,8 @@ def generate_authors_files(article_doi:str, article_cite:str, authors:dict, citi
         author_importance = author['importance'] #importancia do autor na autoria do artigo
 
         if not os.path.isdir(author_dir):
+            new_authors += 1
+
             print(f'Creating folder for author {author_id}')            
             os.makedirs(author_dir)            
 
@@ -124,10 +134,13 @@ def get_affiliation(affiliation_name):
     json = response.json()
 
     try:
-        country = json["items"][0]["organization"]["country"]
-        #print(country)
+        if(len(json["items"]) > 0):
+            country = json["items"][0]["organization"]["country"]
+            #print(country)
+        else:
+            raise KeyError
         return country
-    except KeyError: #afiliacao n foi encontrada
+    except KeyError: #afiliacao nao foi encontrada
         print(f"Afiliação {affiliation_name} não encontrada na API.")
         return ""
 
@@ -182,43 +195,57 @@ def get_article(article_name):
 
         #print(authors)
         return article_doi, article_citations, authors
+    except AttributeError:
+        print(f"Artigo {article_name} foi retornado incompleto pelo scopus.")
+        scopus_error += 1
+        return None, None, None
     except KeyError: #artigo nao foi encontrado
         print(f"Artigo {article_name} não encontrado no Scopus.")
         scopus_error += 1
         return None, None, None
+    except Exception:
+        print(f"Random exception!")
+        error += 1
+        return None, None, None
+
 
 def analyse_articles_references(article:dict):
     article_references = article["References"]
     global yes, no, error
     
-    for reference in article_references:
-        reference_split = reference.split(',')
-        if len(reference_split) > 2 : #tem que ser pelo menos [author, title, year]
-            try:
-                reference_year = str(reference_split[len(reference_split)-1]).strip()[1:-1]
-                
-                if int(reference_year) > MINIMUM_ARTICLE_YEAR:
-                    #print("yeah")
-                    #print(reference_split, reference_year)  
-                    yes += 1  
-                    for item in reference_split:
-                        #print(item[-1])
-                        if(item[-1] != '.'):
-                            print(item)
-                            
-                            article_doi, article_cite, authors = get_article(item)
-                            if authors != None:
-                                generate_authors_files(article_doi, article_cite, authors, article)                            
-                            #return
-                            break                            
-                else:
-                    no += 1  
-            except ValueError: #não tem ano
-                #print(f"Erro na referência: {reference_split}")
-                error += 1     
-                continue
-        else:
-            no += 1  
+    if len(article['Author(s) ID']) == len(article["Authors with affiliations"]): #evitando IndexError
+        for reference in article_references:
+            reference_split = reference.split(',')
+            if len(reference_split) > 2 : #tem que ser pelo menos [author, title, year]
+                try:
+                    # print(reference_split)
+                    reference_year = 0
+                    # reference_year = str(reference_split[len(reference_split)-1]).strip()[1:-1]
+                    match = re.search(r"\((\d{4})\)", reference)
+                    if match: reference_year = match.group(1)
+                    #print(reference_year)
+
+                    if int(reference_year) > MINIMUM_ARTICLE_YEAR and int(reference_year) < MAXIMUM_ARTICLE_YEAR:
+                        #print("yeah")
+                        #print(reference_split, reference_year)  
+                        yes += 1  
+                        for item in reference_split:
+                            #print(item[-1])
+                            if(item[-1] != '.'):
+                                #print(item)
+                                
+                                # article_doi, article_cite, authors = get_article(item)
+                                # if authors != None:
+                                #     generate_authors_files(article_doi, article_cite, authors, article)                            
+                                break                            
+                    else:
+                        no += 1  
+                except ValueError: #não tem ano
+                    #print(f"Erro na referência: {reference_split}")
+                    error += 1     
+                    continue
+            else:
+                no += 1  
 
 def split_data(csv:str):
     splitted = csv.split('\n')
@@ -227,14 +254,21 @@ def split_data(csv:str):
     #print(f'columns: {columns}')
     
     for i, row in enumerate(splitted):
-        #if i > 0 and i < len(splitted)-1:
-        if i == 5:
-            entries = row[1:len(row)-1].split('\",\"')
-            dict = {columns[i]: entries[i].split(';') for i in range(len(columns))}
-            #print(dict)
-            analyse_articles_references(dict)            
+        if i > 0 and (i < len(splitted)-1):
+        # if i > 0 and i < 2:
+            try:
+                print(f"{i}th article")
+                #print(row)
+                entries = row[1:len(row)-1].split('\",\"')
+                #print(entries)
+                dict = {columns[i]: entries[i].split(';') for i in range(len(columns))}
+                #print(dict)
+                analyse_articles_references(dict)    
+            except IndexError as exc:
+                print("INDEX ERROR: ", exc) 
     
-    print(f"saldo: yes {yes} no {no} error {error} scopus error {scopus_error}")         
+    print(f"saldo: yes {yes} no {no} error {error} scopus error {scopus_error}")    
+    print(f"created {new_authors} new authors")     
            
-ic_csv = read_csv("./export-query3.csv")
+ic_csv = read_csv("./export-query4-references.csv")
 split_data(ic_csv)
