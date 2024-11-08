@@ -9,6 +9,8 @@ import re
 import pandas as pd
 from pyvis.network import Network
 import numpy as np
+import ast
+from collections import defaultdict
 
 load_dotenv()
 
@@ -51,7 +53,7 @@ class ArticlesGraph:
     def __generate_nx_collab_graph__(self):
         results = gds.run_cypher(
         """
-            MATCH (n:Researcher)-[r:COLLABORATED]->(m:Researcher)
+            MATCH (n:Researcher)-[r:COLLABORATED]-(m:Researcher)
             RETURN n.scopus_id AS source, m.scopus_id AS target
         """
         )
@@ -66,7 +68,11 @@ class ArticlesGraph:
 
         #print(self.nx_collab_graph.number_of_nodes(), self.nx_collab_graph.number_of_edges())
 
-    def node_betweenness(self):
+    def node_betweenness(self, plot=True):
+        '''
+        Calcula o betweenness de cada nó e plota distribuição
+        '''
+        
         per_node_betweenness = gds.run_cypher(
             """
                 CALL gds.betweenness.stream('undirected_collab_graph')
@@ -76,126 +82,297 @@ class ArticlesGraph:
             """
         )
         print(f"Per node betweenness: {per_node_betweenness}")
-        # TODO: Visualizar distribuição
+        mean = per_node_betweenness["score"].mean()
+        print(f"Betweenness médio: {mean}")
+
+        if plot:
+            plt.figure(figsize=(10, 6))
+            plt.hist(per_node_betweenness["score"], edgecolor='black', alpha=0.7)
+            
+            # plt.xticks(np.arange(0, max(degrees)+1, step=20))  
+            plt.axvline(mean, color='red', linestyle='--', linewidth=1.5, label=f'Média = {mean:.2f}')
+
+            plt.xlabel("Betweenness")
+            plt.ylabel("Frequência")
+            plt.title("Distribuição do betweenness dos nós")
+            plt.legend()
+            plt.ylim(0, 200)
+            plt.show()
 
         return per_node_betweenness
 
-    def edge_betweenness(self):       
+    def edge_betweenness(self, plot=True):       
+        '''
+        Calcula o betweeenness dos nós e plota distribuição
+        '''
+        
         """ per_edge_betweenness = nx.edge_betweenness_centrality(self.nx_collab_graph)
-        #print(per_edge_betweenness)
+        print(per_edge_betweenness)
 
         with open("./edge-betweenness.txt", "w") as file:
             file.write(str(per_edge_betweenness))
-            file.close() """   
+            file.close()   """ 
 
         bet_file = read_file("./results/edge-betweenness.txt")
 
         pattern = r"\((\d+), (\d+)\): ([\d\.e\-]+)"
         matches = re.findall(pattern, bet_file)
 
-        df = pd.DataFrame(matches, columns=["source", "target", "score"])
+        per_edge_betweenness = pd.DataFrame(matches, columns=["source", "target", "score"])
 
-        df["source"] = df["source"].astype(int)
-        df["target"] = df["target"].astype(int)
-        df["score"] = df["score"].astype(float)
-        df.sort_values(by="score", ascending=False, inplace=True)
-        df.reset_index(inplace=True, drop=True)
-        print(f"Per edge betweenness: {df}")
-        # TODO: Visualizar distribuição
+        per_edge_betweenness["source"] = per_edge_betweenness["source"].astype(int)
+        per_edge_betweenness["target"] = per_edge_betweenness["target"].astype(int)
+        per_edge_betweenness["score"] = per_edge_betweenness["score"].astype(float)
+        per_edge_betweenness.sort_values(by="score", ascending=False, inplace=True)
+        per_edge_betweenness.reset_index(inplace=True, drop=True)        
+        print(f"Per edge betweenness:\n {per_edge_betweenness}")
+        
+        mean = per_edge_betweenness["score"].mean()
+        print(f"Betweenness médio: {mean}")
 
-        return df
+        if plot:
+            plt.figure(figsize=(10, 6))
+            plt.hist(per_edge_betweenness["score"], edgecolor='black', alpha=0.7)
+            
+            # plt.xticks(np.arange(0, max(degrees)+1, step=20))  
+            plt.axvline(mean, color='red', linestyle='--', linewidth=1.5, label=f'Média = {mean}')
+
+            plt.xlabel("Betweenness")
+            plt.ylabel("Frequência")
+            plt.title("Distribuição do betweenness das arestas")
+            plt.legend()
+            plt.ylim(0, 200)
+            plt.show()
+
+        return per_edge_betweenness
 
     def graph_components(self):
+        ''''
+        Calcula a quantidade de componentes conexas e printa a distribuição
+        '''
+
         weak_components = gds.wcc.stats(self.proj_full_collab_graph)
         print(f'Count of weak components: {weak_components["componentCount"]}')
 
-        components_per_node = gds.wcc.write(proj_full_collab_graph, writeProperty = 'weak_component')
+        components_per_node = gds.wcc.stream(proj_full_collab_graph)
         print(components_per_node)
 
-        # TODO: Visualizar os componentes
+        component_sizes = components_per_node.groupby('componentId')['nodeId'].count()
+        print(component_sizes)
+
+        # Plotando a distribuição das componentes
+        plt.hist(component_sizes, range=(0, 50), alpha=0.7)
+
+        # Adicionando título e rótulos aos eixos
+        plt.title('Distribuição do Tamanho das Componentes Conexas')
+        plt.xlabel('Tamanho da Componente')
+        plt.ylabel('Frequência')
+
+        # Exibindo o gráfico
+        plt.show()
 
     def nodes_clustering_coef(self):
+        '''
+        Calcula o coeficiente de clusterização de cada nó e plota distribuição
+        '''
         per_node_clustering = gds.run_cypher(
         """
-            CALL gds.localClusteringCoefficient.stream('undirected_collab_graph')
+            CALL gds.localClusteringCoefficient.write('undirected_collab_graph')
             YIELD nodeId, localClusteringCoefficient
             RETURN gds.util.asNode(nodeId).scopus_id AS scopus_id, localClusteringCoefficient
             ORDER BY localClusteringCoefficient DESC, scopus_id
         """)
         print(f"Per node clustering coefficient: {per_node_clustering}")
-        # TODO: Gerar distribuição
+
+        mean = per_node_clustering["localClusteringCoefficient"].mean()
+        plt.hist(per_node_clustering["localClusteringCoefficient"], edgecolor='black', alpha=0.7)
+        
+        # plt.xticks(np.arange(0, max(degrees)+1, step=20))  
+        plt.axvline(mean, color='red', linestyle='--', linewidth=1.5, label=f'Média = {mean}')
+
+        plt.xlabel("Coeficiente")
+        plt.ylabel("Frequência")
+        plt.title("Distribuição dos coeficientes de clusterização")
+        plt.legend()
+        plt.show()
 
     def global_clustering_coef(self):
+        '''
+        Calcula o coeficiente de clusterização do grafo
+        '''
         global_clustering = gds.localClusteringCoefficient.stats(self.proj_undirected_collab_graph)["averageClusteringCoefficient"]
         print(f"Global clustering coefficient: {global_clustering}")
 
-    def nodes_distance(self):
-        pass
-        # all_nodes_distance =  gds.allShortestPaths.stream(self.proj_undirected_collab_graph)
-        # print(f"All nodes distance: {all_nodes_distance}")    
+    def nodes_distance(self):  
+        '''
+        Calcula a menor distância entre todos os pares de nós e plota a distribuição
+        '''         
+        all_nodes_distance = dict(nx.algorithms.all_pairs_shortest_path_length(self.nx_collab_graph))
+        print(all_nodes_distance)
 
+        mean = self.__calculate_average_distance__(all_nodes_distance)
+        print("Média das distâncias:", mean)
+
+        dist_distribution = self.__calculate_distance_distribution__(all_nodes_distance)
+        print("Distribuição de distâncias:", dict(dist_distribution))
+
+        distances = list(dist_distribution.keys())
+        frequencies = list(dist_distribution.values())
+
+        plt.bar(distances, frequencies, edgecolor="black")
+        plt.axvline(mean, color='red', linestyle='--', linewidth=1.5, label=f'Média = {mean}')
+        plt.xlabel("Distância")
+        plt.ylabel("Frequência")
+        plt.title("Distribuição das Distâncias entre os Nós")
+        plt.legend()
+        plt.show()
+
+    def __calculate_average_distance__(self, paths_dict):
+        total_distance = 0
+        total_pairs = 0
+        for node, distances in paths_dict.items():
+            for dist in distances.values():
+                if dist != float('inf'):  
+                    total_distance += dist
+                    total_pairs += 1
+        return total_distance / total_pairs if total_pairs > 0 else 0
+
+    def __calculate_distance_distribution__(self, paths_dict, total_nodes=22052, inf_value=9999):
+        distribution = defaultdict(int)
+        for node, distances in paths_dict.items():
+            unreachable_count = total_nodes - len(distances) 
+            for dist in distances.values():
+                if dist == float('inf'):
+                    distribution[inf_value] += 1
+                else:
+                    distribution[dist] += 1
+            #distribution[inf_value] += unreachable_count 
+        return distribution 
+           
     def removing_nodes(self):
         """ 
             Removes the 10 largest betweenness nodes
         """
-        per_node_betweenness = self.node_betweenness()
+        per_node_betweenness = self.node_betweenness(False)
+        
+        means = []
+        weak_components = []
+        distances_means = []
 
-        for i in range(10):
+        range_list = range(10)
+        for i in range_list:
             node_id, bet = per_node_betweenness['scopus_id'][i], per_node_betweenness['score'][i]
             print(f"Removing {node_id} with betweenness {bet}")
 
             self.nx_collab_graph.remove_node(node_id)
 
-            weak_components = nx.number_connected_components(self.nx_collab_graph)
-            print(f'Count of weak components: {weak_components}')
+            weak_components_count = nx.number_connected_components(self.nx_collab_graph)
+            print(f'Count of weak components: {weak_components_count}')
+            weak_components.append(weak_components_count)
 
-            degree_sequence = [degree for node, degree in self.nx_collab_graph.degree()]
-            df_degree = pd.DataFrame(degree_sequence, columns=['degree'])
-            print(f'New degree distribution: {df_degree.describe()}')
+            degree_sequence = np.array([degree for node, degree in self.nx_collab_graph.degree()])
+            # df_degree = pd.DataFrame(degree_sequence, columns=['degree'])
+            mean = degree_sequence.mean()
+            print(f'Mean degree: {mean}')
+            means.append(mean)
+
+            all_nodes_distance = dict(nx.algorithms.all_pairs_shortest_path_length(self.nx_collab_graph))
+            distances_mean = self.__calculate_average_distance__(all_nodes_distance)
+            distances_means.append(distances_mean)
+            print(f'Mean distance: {distances_mean}')
+
+
+        fig, axs = plt.subplots(3)
+        axs[0].plot(range_list, means)
+        axs[0].set_title('Grau médio')
+
+        axs[1].plot(range_list, weak_components, 'tab:orange')
+        axs[1].set_title('Componentes conexas')
+
+        axs[2].plot(range_list, distances_means, 'tab:green')
+        axs[2].set_title('Distância média entre os nós')
         
+        fig.suptitle('Evolução da rede ao retirar os nós de maior betweenness')
+        plt.show()
+
         self.__generate_nx_collab_graph__()
         
     def removing_edges(self):
         """ 
             Removes the 10 largest betweenness edges
         """
-        edge_betweenness = self.edge_betweenness()
+        edge_betweenness = self.edge_betweenness(False)
 
-        for i in range(10):
+        means = []
+        weak_components = []
+        distances_means = []
+
+        range_list = range(10)
+        for i in range_list:
             source, target, bet = edge_betweenness["source"][i], edge_betweenness["target"][i], edge_betweenness["score"][i]
             print(f"Removing {source, target} with betweenness {bet}")
 
             self.nx_collab_graph.remove_edge(source, target)
 
-            weak_components = nx.number_connected_components(self.nx_collab_graph)
-            print(f'Count of weak components: {weak_components}')
-            
+            weak_components_count = nx.number_connected_components(self.nx_collab_graph)
+            print(f'Count of weak components: {weak_components_count}')
+            weak_components.append(weak_components_count)
 
-            all_shortest_paths = nx.all_pairs_shortest_path_length(self.nx_collab_graph)
-            distances = []
-            for node, paths in all_shortest_paths:
-                for target_node, distance in paths.items():
-                    if distance > 0:
-                        distances.append(distance)
+            degree_sequence = np.array([degree for node, degree in self.nx_collab_graph.degree()])
+            # df_degree = pd.DataFrame(degree_sequence, columns=['degree'])
+            mean = degree_sequence.mean()
+            print(f'Mean degree: {mean}')
+            means.append(mean)
 
-            distances_distrib = pd.DataFrame(distances, columns=['distance'])
-            print(f"Nodes distances distrib: {distances_distrib.describe()}")
+            all_nodes_distance = dict(nx.algorithms.all_pairs_shortest_path_length(self.nx_collab_graph))
+            distances_mean = self.__calculate_average_distance__(all_nodes_distance)
+            distances_means.append(distances_mean)
+            print(f'Mean distance: {distances_mean}')
+
+        fig, axs = plt.subplots(3)
+        axs[0].plot(range_list, means)
+        axs[0].set_title('Grau médio')
+
+        axs[1].plot(range_list, weak_components, 'tab:orange')
+        axs[1].set_title('Componentes conexas')
+
+        axs[2].plot(range_list, distances_means, 'tab:green')
+        axs[2].set_title('Distância média entre os nós')
+        
+        fig.suptitle('Evolução da rede ao retirar as arestas de maior betweenness')
+        plt.show()
+
         self.__generate_nx_collab_graph__()
 
-    def nodes_degrees(self):
-        degree_distribution = proj_full_collab_graph.degree_distribution()
-        print(degree_distribution)
-        """ fig, ax = plt.subplots()
-        ax.hist(degree_distribution)
-        plt.show() """
+    def nodes_degrees(self): 
+        '''
+        Plota a distribuição dos graus dos nós e exibe quais são os autores de maior grau
+        '''
+        nodes_degrees = self.nx_collab_graph.degree()
+        degrees = np.array([degree for node, degree in nodes_degrees])
+        mean = round(degrees.mean())
+        print(f'Mean degree: {mean}')
+        print(f"Min degree: {min(degrees)}, Max degree: {max(degrees)}")
+        
+        #Plotagem da distribuição
+        plt.figure(figsize=(10, 6))
+        plt.hist(degrees, edgecolor='black', alpha=0.7)
+        
+        plt.xticks(np.arange(0, max(degrees)+1, step=20))  
+        plt.axvline(mean, color='red', linestyle='--', linewidth=1.5, label=f'Média = {mean}')
 
-        print(f'Mean degree: {round(degree_distribution["mean"])}')
+        plt.xlabel("Grau")
+        plt.ylabel("Frequência")
+        plt.title("Distribuição dos graus dos nós")
+        plt.legend()
+        plt.show()
 
-    def graph_vis(self):
-        #TODO: pyvis
-        nt = Network('500px', '500px')
-        nt.from_nx(self.nx_collab_graph)
-        nt.show('nx.html', notebook=False)
+        #Visualização dos nós com maior grau
+        sorted_nodes = sorted(nodes_degrees, key=lambda x: x[1], reverse=True)
+        top_10_nodes = sorted_nodes[:10]
+
+        for node, degree in top_10_nodes:
+            print(f"Nó: {node}, Grau: {degree}")
 
     def community_detection(self):
         # graph_communities = gds.louvain.stream(proj_undirected_collab_graph)
@@ -299,6 +476,8 @@ class ArticlesGraph:
                 if ranking[i][0] in ic_communities or full:       
                     print(f"{i+1}º -- Community ID: {ranking[i][0]}, International Citations: {ranking[i][1]}, National Citations: {ranking[i][2]}")
     
+        return ranking
+    
     def get_ic_authors_stats(self):
         file_line = read_file(ic_comms_file)
         ic_comms = file_line.split("\n")
@@ -363,6 +542,71 @@ class ArticlesGraph:
                     if ranking[i][0] in ic_authors or full:
                         print(f"{i+1}º -- Author: {ranking[i][0]}, Citations: {ranking[i][1]}")
 
+    def get_most_frequent_collabs(self):
+        """
+            Conta a quantidade de colaborações realizadas entre um pesquisador do IC e outro pesquisador do Brasil 
+            e retorna as filiações com que há mais colaborações.
+        """
+
+        # results = gds.run_cypher(
+        # """
+        #     MATCH (n:Researcher)-[r:COLLABORATED]-(m) WHERE 
+        #     (n.affiliation CONTAINS 'Institute of Computing' AND n.affiliation CONTAINS 'Campinas') 
+        #     AND m.affiliation_type='National'
+        #     RETURN m.affiliation as affiliations
+        # """)
+
+        # print(results)
+
+        # affiliations = results["affiliations"].unique()
+        # print(affiliations)
+
+        # df_institute_campinas = results["affiliations"][
+        #     results["affiliations"].str.contains("Institute of Computing", case=False) &
+        #     results["affiliations"].str.contains("Campinas", case=False)
+        # ]
+
+        # df_other_affiliations = results["affiliations"][~results["affiliations"].index.isin(df_institute_campinas.index)]
+
+        # affiliation_counts = df_other_affiliations.value_counts()
+        # # write_file("./results/affiliations_frequency.txt", affiliation_counts.to_string())        
+        # affiliation_counts.to_csv('./results/affiliation_counts.csv', header=['count'], index_label='affiliation')
+
+        df = pd.read_csv("./results/affiliation_counts.csv")
+        df = df.sort_values(by='count', ascending=False)
+        top_10_affiliations = df.head(10)
+        print(top_10_affiliations)
+
+
+    
+    def plot_communities_stats(self, international=True):
+        ranking  = self.generate_communities_rankings(False, international)
+        top_10 = ranking[:10]
+    
+        community_ids = [item[0] for item in top_10]
+        international_counts = [item[1] for item in top_10]
+        national_counts = [item[2] for item in top_10]
+        
+        bar_width = 0.35
+        index = np.arange(len(community_ids))
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        ax.bar(index, international_counts, bar_width, label='International')
+        ax.bar(index + bar_width, national_counts, bar_width, label='National')
+        
+        ax.set_xlabel('Community ID')
+        ax.set_ylabel('Citations')
+        # ax.set_title('Citation type by community')
+        ax.set_xticks(index + bar_width / 2)
+        ax.set_xticklabels(community_ids)
+        ax.legend()
+        
+        plt.xticks()
+        plt.tight_layout()
+        plt.show()   
+
+        
 try:    
     proj_full_collab_graph, result = gds.graph.project(
         "full_collab_graph",
@@ -418,8 +662,7 @@ try:
     
     # # Mostrar o que ocorre a medida que voce retira nos/arestas com maior betweeness.
     # # Retirando os nós
-    # articles_graph.removing_nodes()
-    
+    # articles_graph.removing_nodes()    
     # #Retirando as arestas
     # articles_graph.removing_edges()    
 
@@ -429,12 +672,16 @@ try:
     # Fazer uma visualização do grafo
     #articles_graph.graph_vis()
 
-    # Detecção de grupos
+    # Detecção de grupos e rankings
     # articles_graph.community_detection()
     # articles_graph.get_communities_stats()
-    articles_graph.generate_communities_rankings(False, True)
+    # articles_graph.generate_communities_rankings(False, False)
     # articles_graph.get_ic_authors_stats()
     # articles_graph.generate_authors_rankings()
+    # articles_graph.plot_communities_stats()
+
+    #Verificando as colaborações nacionais
+    articles_graph.get_most_frequent_collabs()
 
 finally:
     proj_full_collab_graph = gds.graph.get("full_collab_graph")
